@@ -1,0 +1,110 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.namespace }}
+  labels:
+    app: referralmesh
+    env: {{ .Values.environment }}
+    managed-by: helm
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: {{ .Values.namespace }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: referralmesh-default-limits
+  namespace: {{ .Values.namespace }}
+spec:
+  limits:
+    - type: Container
+      defaultRequest:
+        cpu: 100m
+        memory: 128Mi
+      default:
+        cpu: 250m
+        memory: 256Mi
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: referralmesh-namespace-quota
+  namespace: {{ .Values.namespace }}
+spec:
+  hard:
+    requests.cpu: "8"
+    requests.memory: 16Gi
+    limits.cpu: "16"
+    limits.memory: 32Gi
+    pods: "60"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: referralmesh-shared-config
+  namespace: {{ .Values.namespace }}
+data:
+  GCP_PROJECT_ID: {{ .Values.gcpProjectId | quote }}
+  ENVIRONMENT: {{ .Values.environment | quote }}
+  PUBSUB_TOPIC_REFERRAL_INTAKE: "referral-intake"
+  PUBSUB_TOPIC_REFERRAL_MATCHED: "referral-matched"
+  PUBSUB_TOPIC_ELIGIBILITY_REQUEST: "eligibility-check-request"
+  PUBSUB_TOPIC_ELIGIBILITY_RESULT: "eligibility-check-result"
+  PUBSUB_TOPIC_NOTIFICATION_DISPATCH: "notification-dispatch"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: referralmesh-prometheus-scrape
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "endpoints"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: referralmesh-prometheus-scrape
+subjects:
+  - kind: ServiceAccount
+    name: prometheus-operator
+    namespace: monitoring
+roleRef:
+  kind: ClusterRole
+  name: referralmesh-prometheus-scrape
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: referralmesh-ingress
+  namespace: {{ .Values.namespace }}
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  tls:
+    - hosts:
+        - {{ .Values.ingressHost }}
+      secretName: referralmesh-tls
+  rules:
+    - host: {{ .Values.ingressHost }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: referral-api
+                port:
+                  number: 8080

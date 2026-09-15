@@ -1,0 +1,266 @@
+{{- range .Values.services }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .name }}
+  namespace: {{ $.Values.namespace }}
+  annotations:
+    iam.gke.io/gcp-service-account: {{ .gcpServiceAccount }}
+automountServiceAccountToken: {{ .automountServiceAccountToken }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .name }}-config
+  namespace: {{ $.Values.namespace }}
+data:
+  SERVICE_NAME: {{ .name | quote }}
+  LOG_FORMAT: "json"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .name }}-secret-refs
+  namespace: {{ $.Values.namespace }}
+  annotations:
+    # populated by an External Secrets sync from Secret Manager; no secret
+    # material is ever committed to this chart
+    external-secrets.io/backend: gcp-secret-manager
+type: Opaque
+stringData:
+  SECRET_MANAGER_PROJECT: {{ $.Values.gcpProjectId | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .name }}
+  namespace: {{ $.Values.namespace }}
+  labels:
+    app: {{ .name }}
+    env: {{ $.Values.environment }}
+    managed-by: helm
+spec:
+  replicas: {{ .replicas }}
+  selector:
+    matchLabels:
+      app: {{ .name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .name }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/service-resources.yaml") $ | sha256sum }}
+    spec:
+      serviceAccountName: {{ .name }}
+      automountServiceAccountToken: {{ .automountServiceAccountToken }}
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: {{ .name }}
+          image: {{ .image }}
+          ports:
+            - containerPort: {{ .port }}
+          envFrom:
+            - configMapRef:
+                name: referralmesh-shared-config
+            - configMapRef:
+                name: {{ .name }}-config
+          resources:
+            requests:
+              cpu: {{ .cpuRequest }}
+              memory: {{ .memRequest }}
+            {{- if or .cpuLimit .memLimit }}
+            limits:
+              {{- if .cpuLimit }}
+              cpu: {{ .cpuLimit }}
+              {{- end }}
+              {{- if .memLimit }}
+              memory: {{ .memLimit }}
+              {{- end }}
+            {{- end }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: {{ .readOnlyRootFilesystem }}
+            capabilities:
+              drop: ["ALL"]
+          {{- if not .readOnlyRootFilesystem }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          {{- end }}
+      {{- if not .readOnlyRootFilesystem }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .name }}
+  namespace: {{ $.Values.namespace }}
+  labels:
+    app: {{ .name }}
+spec:
+  selector:
+    app: {{ .name }}
+  ports:
+    - name: http
+      port: {{ .port }}
+      targetPort: {{ .port }}
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+---
+{{- if .createPdb }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .name }}-pdb
+  namespace: {{ $.Values.namespace }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: {{ .name }}
+---
+{{- end }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ .name }}-hpa
+  namespace: {{ $.Values.namespace }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ .name }}
+  minReplicas: {{ .minReplicas }}
+  maxReplicas: {{ .maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ .name }}
+  namespace: {{ $.Values.namespace }}
+  labels:
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: {{ .name }}
+  endpoints:
+    - port: metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ .name }}-alerts
+  namespace: {{ $.Values.namespace }}
+  labels:
+    release: prometheus
+spec:
+  groups:
+    - name: {{ .name }}.rules
+      rules:
+        - alert: {{ .name }}PodDown
+          expr: kube_deployment_status_replicas_available{deployment="{{ .name }}"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "{{ .name }} has zero available replicas"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .name }}-role
+  namespace: {{ $.Values.namespace }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .name }}-rolebinding
+  namespace: {{ $.Values.namespace }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .name }}
+    namespace: {{ $.Values.namespace }}
+roleRef:
+  kind: Role
+  name: {{ .name }}-role
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .name }}-egress-dns
+  namespace: {{ $.Values.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: {{ .name }}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .name }}-egress-gcp
+  namespace: {{ $.Values.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: {{ .name }}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 199.36.153.8/30 # private.googleapis.com restricted VIP
+      ports:
+        - protocol: TCP
+          port: 443
+{{- if .exposeIngress }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .name }}-ingress-from-controller
+  namespace: {{ $.Values.namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: {{ .name }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: {{ .port }}
+{{- end }}
+{{- end }}

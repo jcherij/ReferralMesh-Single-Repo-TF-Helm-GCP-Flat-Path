@@ -1,0 +1,6 @@
+apiVersion: v2
+name: referralmesh
+description: ReferralMesh — patient referral coordination platform (GKE workloads)
+type: application
+version: 1.4.0
+appVersion: "2026.09.1"

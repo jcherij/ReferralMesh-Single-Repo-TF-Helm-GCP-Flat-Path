@@ -1,0 +1,112 @@
+namespace: referralmesh
+environment: production
+gcpProjectId: referralmesh-prod-4471
+ingressHost: referrals.example.com
+
+# One entry per microservice deployed into the referralmesh namespace.
+# gcpServiceAccount must match the Workload Identity binding created in
+# iam.tf (google_service_account_iam_member.<service>_wi).
+services:
+  - name: referral-api
+    image: us-docker.pkg.dev/referralmesh-prod-4471/referralmesh/referral-api:2026.09.1
+    port: 8080
+    replicas: 3
+    minReplicas: 3
+    maxReplicas: 10
+    cpuRequest: 200m
+    cpuLimit: 500m
+    memRequest: 256Mi
+    memLimit: 512Mi
+    gcpServiceAccount: referralmesh-referral-api@referralmesh-prod-4471.iam.gserviceaccount.com
+    exposeIngress: true
+    readOnlyRootFilesystem: true
+    automountServiceAccountToken: false
+    createPdb: true
+
+  - name: referral-worker
+    image: us-docker.pkg.dev/referralmesh-prod-4471/referralmesh/referral-worker:2026.09.1
+    port: 9090
+    replicas: 3
+    minReplicas: 2
+    maxReplicas: 8
+    cpuRequest: 250m
+    cpuLimit: 500m
+    memRequest: 256Mi
+    memLimit: 512Mi
+    gcpServiceAccount: referralmesh-referral-worker@referralmesh-prod-4471.iam.gserviceaccount.com
+    exposeIngress: false
+    readOnlyRootFilesystem: true
+    automountServiceAccountToken: false
+    # No PDB configured for this service despite running 3 replicas behind
+    # an availability SLA — a node drain can take the whole matching
+    # pipeline down at once.
+    createPdb: false
+
+  - name: eligibility-sync
+    image: us-docker.pkg.dev/referralmesh-prod-4471/referralmesh/eligibility-sync:2026.09.1
+    port: 9090
+    replicas: 2
+    minReplicas: 2
+    maxReplicas: 6
+    cpuRequest: 200m
+    cpuLimit: ""   # limit intentionally left unset — service was flagged as BestEffort/Burstable QoS during a node-pressure eviction incident
+    memRequest: 256Mi
+    memLimit: ""
+    gcpServiceAccount: referralmesh-eligibility-sync@referralmesh-prod-4471.iam.gserviceaccount.com
+    exposeIngress: false
+    readOnlyRootFilesystem: true
+    automountServiceAccountToken: false
+    createPdb: true
+
+  - name: document-processor
+    image: us-docker.pkg.dev/referralmesh-prod-4471/referralmesh/document-processor:2026.09.1
+    port: 9090
+    replicas: 2
+    minReplicas: 2
+    maxReplicas: 6
+    cpuRequest: 300m
+    cpuLimit: 750m
+    memRequest: 512Mi
+    memLimit: 1Gi
+    gcpServiceAccount: referralmesh-document-processor@referralmesh-prod-4471.iam.gserviceaccount.com
+    exposeIngress: false
+    # Writes incoming referral PDFs to local disk for virus-scan + OCR
+    # before uploading to GCS. The chart was never updated to mount an
+    # emptyDir for /tmp and flip this to true.
+    readOnlyRootFilesystem: false
+    automountServiceAccountToken: false
+    createPdb: true
+
+  - name: notification-service
+    image: us-docker.pkg.dev/referralmesh-prod-4471/referralmesh/notification-service:2026.09.1
+    port: 9090
+    replicas: 2
+    minReplicas: 2
+    maxReplicas: 6
+    cpuRequest: 150m
+    cpuLimit: 400m
+    memRequest: 256Mi
+    memLimit: 512Mi
+    gcpServiceAccount: referralmesh-notification-svc@referralmesh-prod-4471.iam.gserviceaccount.com
+    exposeIngress: false
+    readOnlyRootFilesystem: true
+    # Doesn't call the Kubernetes API, but the chart was copied from a
+    # controller-style service template and this was never turned off.
+    automountServiceAccountToken: true
+    createPdb: true
+
+  - name: audit-exporter
+    image: us-docker.pkg.dev/referralmesh-prod-4471/referralmesh/audit-exporter:2026.09.1
+    port: 9090
+    replicas: 1
+    minReplicas: 1
+    maxReplicas: 3
+    cpuRequest: 100m
+    cpuLimit: 250m
+    memRequest: 128Mi
+    memLimit: 256Mi
+    gcpServiceAccount: referralmesh-notification-svc@referralmesh-prod-4471.iam.gserviceaccount.com
+    exposeIngress: false
+    readOnlyRootFilesystem: true
+    automountServiceAccountToken: false
+    createPdb: false
