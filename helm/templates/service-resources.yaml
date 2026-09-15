@@ -1,145 +1,126 @@
-{{- range .Values.services }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ .name }}
-  namespace: {{ $.Values.namespace }}
+  name: referral-api
+  namespace: referralmesh
   annotations:
-    iam.gke.io/gcp-service-account: {{ .gcpServiceAccount }}
-automountServiceAccountToken: {{ .automountServiceAccountToken }}
+    iam.gke.io/gcp-service-account: referralmesh-referral-api@referralmesh-prod-4471.iam.gserviceaccount.com
+automountServiceAccountToken: false
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ .name }}-config
-  namespace: {{ $.Values.namespace }}
+  name: referral-api-config
+  namespace: referralmesh
 data:
-  SERVICE_NAME: {{ .name | quote }}
+  SERVICE_NAME: "referral-api"
   LOG_FORMAT: "json"
 ---
 apiVersion: v1
 kind: Secret
 metadata:
-  name: {{ .name }}-secret-refs
-  namespace: {{ $.Values.namespace }}
+  name: referral-api-secret-refs
+  namespace: referralmesh
   annotations:
     # populated by an External Secrets sync from Secret Manager; no secret
     # material is ever committed to this chart
     external-secrets.io/backend: gcp-secret-manager
 type: Opaque
 stringData:
-  SECRET_MANAGER_PROJECT: {{ $.Values.gcpProjectId | quote }}
+  SECRET_MANAGER_PROJECT: "referralmesh-prod-4471"
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ .name }}
-  namespace: {{ $.Values.namespace }}
+  name: referral-api
+  namespace: referralmesh
   labels:
-    app: {{ .name }}
-    env: {{ $.Values.environment }}
+    app: referral-api
+    env: production
     managed-by: helm
 spec:
-  replicas: {{ .replicas }}
+  replicas: 3
   selector:
     matchLabels:
-      app: {{ .name }}
+      app: referral-api
   template:
     metadata:
       labels:
-        app: {{ .name }}
+        app: referral-api
       annotations:
-        checksum/config: {{ include (print $.Template.BasePath "/service-resources.yaml") $ | sha256sum }}
+        checksum/config: "placeholder-checksum"
     spec:
-      serviceAccountName: {{ .name }}
-      automountServiceAccountToken: {{ .automountServiceAccountToken }}
+      serviceAccountName: referral-api
+      automountServiceAccountToken: false
       securityContext:
         seccompProfile:
           type: RuntimeDefault
       containers:
-        - name: {{ .name }}
-          image: {{ .image }}
+        - name: referral-api
+          image: us-docker.pkg.dev/referralmesh-prod-4471/referralmesh/referral-api:2026.09.1
           ports:
-            - containerPort: {{ .port }}
+            - containerPort: 8080
           envFrom:
             - configMapRef:
                 name: referralmesh-shared-config
             - configMapRef:
-                name: {{ .name }}-config
+                name: referral-api-config
           resources:
             requests:
-              cpu: {{ .cpuRequest }}
-              memory: {{ .memRequest }}
-            {{- if or .cpuLimit .memLimit }}
+              cpu: 200m
+              memory: 256Mi
             limits:
-              {{- if .cpuLimit }}
-              cpu: {{ .cpuLimit }}
-              {{- end }}
-              {{- if .memLimit }}
-              memory: {{ .memLimit }}
-              {{- end }}
-            {{- end }}
+              cpu: 500m
+              memory: 512Mi
           securityContext:
             runAsNonRoot: true
             runAsUser: 10001
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: {{ .readOnlyRootFilesystem }}
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
-          {{- if not .readOnlyRootFilesystem }}
-          volumeMounts:
-            - name: tmp
-              mountPath: /tmp
-          {{- end }}
-      {{- if not .readOnlyRootFilesystem }}
-      volumes:
-        - name: tmp
-          emptyDir: {}
-      {{- end }}
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ .name }}
-  namespace: {{ $.Values.namespace }}
+  name: referral-api
+  namespace: referralmesh
   labels:
-    app: {{ .name }}
+    app: referral-api
 spec:
   selector:
-    app: {{ .name }}
+    app: referral-api
   ports:
     - name: http
-      port: {{ .port }}
-      targetPort: {{ .port }}
+      port: 8080
+      targetPort: 8080
     - name: metrics
       port: 9090
       targetPort: 9090
 ---
-{{- if .createPdb }}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: {{ .name }}-pdb
-  namespace: {{ $.Values.namespace }}
+  name: referral-api-pdb
+  namespace: referralmesh
 spec:
   minAvailable: 1
   selector:
     matchLabels:
-      app: {{ .name }}
+      app: referral-api
 ---
-{{- end }}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: {{ .name }}-hpa
-  namespace: {{ $.Values.namespace }}
+  name: referral-api-hpa
+  namespace: referralmesh
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: {{ .name }}
-  minReplicas: {{ .minReplicas }}
-  maxReplicas: {{ .maxReplicas }}
+    name: referral-api
+  minReplicas: 3
+  maxReplicas: 10
   metrics:
     - type: Resource
       resource:
@@ -151,14 +132,14 @@ spec:
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
-  name: {{ .name }}
-  namespace: {{ $.Values.namespace }}
+  name: referral-api
+  namespace: referralmesh
   labels:
     release: prometheus
 spec:
   selector:
     matchLabels:
-      app: {{ .name }}
+      app: referral-api
   endpoints:
     - port: metrics
       interval: 30s
@@ -166,27 +147,27 @@ spec:
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
-  name: {{ .name }}-alerts
-  namespace: {{ $.Values.namespace }}
+  name: referral-api-alerts
+  namespace: referralmesh
   labels:
     release: prometheus
 spec:
   groups:
-    - name: {{ .name }}.rules
+    - name: referral-api.rules
       rules:
-        - alert: {{ .name }}PodDown
-          expr: kube_deployment_status_replicas_available{deployment="{{ .name }}"} == 0
+        - alert: referral-apiPodDown
+          expr: kube_deployment_status_replicas_available{deployment="referral-api"} == 0
           for: 5m
           labels:
             severity: critical
           annotations:
-            summary: "{{ .name }} has zero available replicas"
+            summary: "referral-api has zero available replicas"
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ .name }}-role
-  namespace: {{ $.Values.namespace }}
+  name: referral-api-role
+  namespace: referralmesh
 rules:
   - apiGroups: [""]
     resources: ["configmaps"]
@@ -195,26 +176,26 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ .name }}-rolebinding
-  namespace: {{ $.Values.namespace }}
+  name: referral-api-rolebinding
+  namespace: referralmesh
 subjects:
   - kind: ServiceAccount
-    name: {{ .name }}
-    namespace: {{ $.Values.namespace }}
+    name: referral-api
+    namespace: referralmesh
 roleRef:
   kind: Role
-  name: {{ .name }}-role
+  name: referral-api-role
   apiGroup: rbac.authorization.k8s.io
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ .name }}-egress-dns
-  namespace: {{ $.Values.namespace }}
+  name: referral-api-egress-dns
+  namespace: referralmesh
 spec:
   podSelector:
     matchLabels:
-      app: {{ .name }}
+      app: referral-api
   policyTypes: [Egress]
   egress:
     - to:
@@ -228,12 +209,12 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ .name }}-egress-gcp
-  namespace: {{ $.Values.namespace }}
+  name: referral-api-egress-gcp
+  namespace: referralmesh
 spec:
   podSelector:
     matchLabels:
-      app: {{ .name }}
+      app: referral-api
   policyTypes: [Egress]
   egress:
     - to:
@@ -242,17 +223,16 @@ spec:
       ports:
         - protocol: TCP
           port: 443
-{{- if .exposeIngress }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ .name }}-ingress-from-controller
-  namespace: {{ $.Values.namespace }}
+  name: referral-api-ingress-from-controller
+  namespace: referralmesh
 spec:
   podSelector:
     matchLabels:
-      app: {{ .name }}
+      app: referral-api
   policyTypes: [Ingress]
   ingress:
     - from:
@@ -261,6 +241,1115 @@ spec:
               kubernetes.io/metadata.name: ingress-nginx
       ports:
         - protocol: TCP
-          port: {{ .port }}
-{{- end }}
-{{- end }}
+          port: 8080
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: referral-worker
+  namespace: referralmesh
+  annotations:
+    iam.gke.io/gcp-service-account: referralmesh-referral-worker@referralmesh-prod-4471.iam.gserviceaccount.com
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: referral-worker-config
+  namespace: referralmesh
+data:
+  SERVICE_NAME: "referral-worker"
+  LOG_FORMAT: "json"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: referral-worker-secret-refs
+  namespace: referralmesh
+  annotations:
+    # populated by an External Secrets sync from Secret Manager; no secret
+    # material is ever committed to this chart
+    external-secrets.io/backend: gcp-secret-manager
+type: Opaque
+stringData:
+  SECRET_MANAGER_PROJECT: "referralmesh-prod-4471"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: referral-worker
+  namespace: referralmesh
+  labels:
+    app: referral-worker
+    env: production
+    managed-by: helm
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: referral-worker
+  template:
+    metadata:
+      labels:
+        app: referral-worker
+      annotations:
+        checksum/config: "placeholder-checksum"
+    spec:
+      serviceAccountName: referral-worker
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: referral-worker
+          image: us-docker.pkg.dev/referralmesh-prod-4471/referralmesh/referral-worker:2026.09.1
+          ports:
+            - containerPort: 9090
+          envFrom:
+            - configMapRef:
+                name: referralmesh-shared-config
+            - configMapRef:
+                name: referral-worker-config
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: referral-worker
+  namespace: referralmesh
+  labels:
+    app: referral-worker
+spec:
+  selector:
+    app: referral-worker
+  ports:
+    - name: http
+      port: 9090
+      targetPort: 9090
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: referral-worker-hpa
+  namespace: referralmesh
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: referral-worker
+  minReplicas: 2
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: referral-worker
+  namespace: referralmesh
+  labels:
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: referral-worker
+  endpoints:
+    - port: metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: referral-worker-alerts
+  namespace: referralmesh
+  labels:
+    release: prometheus
+spec:
+  groups:
+    - name: referral-worker.rules
+      rules:
+        - alert: referral-workerPodDown
+          expr: kube_deployment_status_replicas_available{deployment="referral-worker"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "referral-worker has zero available replicas"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: referral-worker-role
+  namespace: referralmesh
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: referral-worker-rolebinding
+  namespace: referralmesh
+subjects:
+  - kind: ServiceAccount
+    name: referral-worker
+    namespace: referralmesh
+roleRef:
+  kind: Role
+  name: referral-worker-role
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: referral-worker-egress-dns
+  namespace: referralmesh
+spec:
+  podSelector:
+    matchLabels:
+      app: referral-worker
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: referral-worker-egress-gcp
+  namespace: referralmesh
+spec:
+  podSelector:
+    matchLabels:
+      app: referral-worker
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 199.36.153.8/30 # private.googleapis.com restricted VIP
+      ports:
+        - protocol: TCP
+          port: 443
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: eligibility-sync
+  namespace: referralmesh
+  annotations:
+    iam.gke.io/gcp-service-account: referralmesh-eligibility-sync@referralmesh-prod-4471.iam.gserviceaccount.com
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: eligibility-sync-config
+  namespace: referralmesh
+data:
+  SERVICE_NAME: "eligibility-sync"
+  LOG_FORMAT: "json"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: eligibility-sync-secret-refs
+  namespace: referralmesh
+  annotations:
+    # populated by an External Secrets sync from Secret Manager; no secret
+    # material is ever committed to this chart
+    external-secrets.io/backend: gcp-secret-manager
+type: Opaque
+stringData:
+  SECRET_MANAGER_PROJECT: "referralmesh-prod-4471"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eligibility-sync
+  namespace: referralmesh
+  labels:
+    app: eligibility-sync
+    env: production
+    managed-by: helm
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: eligibility-sync
+  template:
+    metadata:
+      labels:
+        app: eligibility-sync
+      annotations:
+        checksum/config: "placeholder-checksum"
+    spec:
+      serviceAccountName: eligibility-sync
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: eligibility-sync
+          image: us-docker.pkg.dev/referralmesh-prod-4471/referralmesh/eligibility-sync:2026.09.1
+          ports:
+            - containerPort: 9090
+          envFrom:
+            - configMapRef:
+                name: referralmesh-shared-config
+            - configMapRef:
+                name: eligibility-sync-config
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: eligibility-sync
+  namespace: referralmesh
+  labels:
+    app: eligibility-sync
+spec:
+  selector:
+    app: eligibility-sync
+  ports:
+    - name: http
+      port: 9090
+      targetPort: 9090
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: eligibility-sync-pdb
+  namespace: referralmesh
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: eligibility-sync
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: eligibility-sync-hpa
+  namespace: referralmesh
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: eligibility-sync
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: eligibility-sync
+  namespace: referralmesh
+  labels:
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: eligibility-sync
+  endpoints:
+    - port: metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: eligibility-sync-alerts
+  namespace: referralmesh
+  labels:
+    release: prometheus
+spec:
+  groups:
+    - name: eligibility-sync.rules
+      rules:
+        - alert: eligibility-syncPodDown
+          expr: kube_deployment_status_replicas_available{deployment="eligibility-sync"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "eligibility-sync has zero available replicas"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: eligibility-sync-role
+  namespace: referralmesh
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: eligibility-sync-rolebinding
+  namespace: referralmesh
+subjects:
+  - kind: ServiceAccount
+    name: eligibility-sync
+    namespace: referralmesh
+roleRef:
+  kind: Role
+  name: eligibility-sync-role
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: eligibility-sync-egress-dns
+  namespace: referralmesh
+spec:
+  podSelector:
+    matchLabels:
+      app: eligibility-sync
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: eligibility-sync-egress-gcp
+  namespace: referralmesh
+spec:
+  podSelector:
+    matchLabels:
+      app: eligibility-sync
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 199.36.153.8/30 # private.googleapis.com restricted VIP
+      ports:
+        - protocol: TCP
+          port: 443
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: document-processor
+  namespace: referralmesh
+  annotations:
+    iam.gke.io/gcp-service-account: referralmesh-document-processor@referralmesh-prod-4471.iam.gserviceaccount.com
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: document-processor-config
+  namespace: referralmesh
+data:
+  SERVICE_NAME: "document-processor"
+  LOG_FORMAT: "json"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: document-processor-secret-refs
+  namespace: referralmesh
+  annotations:
+    # populated by an External Secrets sync from Secret Manager; no secret
+    # material is ever committed to this chart
+    external-secrets.io/backend: gcp-secret-manager
+type: Opaque
+stringData:
+  SECRET_MANAGER_PROJECT: "referralmesh-prod-4471"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: document-processor
+  namespace: referralmesh
+  labels:
+    app: document-processor
+    env: production
+    managed-by: helm
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: document-processor
+  template:
+    metadata:
+      labels:
+        app: document-processor
+      annotations:
+        checksum/config: "placeholder-checksum"
+    spec:
+      serviceAccountName: document-processor
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: document-processor
+          image: us-docker.pkg.dev/referralmesh-prod-4471/referralmesh/document-processor:2026.09.1
+          ports:
+            - containerPort: 9090
+          envFrom:
+            - configMapRef:
+                name: referralmesh-shared-config
+            - configMapRef:
+                name: document-processor-config
+          resources:
+            requests:
+              cpu: 300m
+              memory: 512Mi
+            limits:
+              cpu: 750m
+              memory: 1Gi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: document-processor
+  namespace: referralmesh
+  labels:
+    app: document-processor
+spec:
+  selector:
+    app: document-processor
+  ports:
+    - name: http
+      port: 9090
+      targetPort: 9090
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: document-processor-pdb
+  namespace: referralmesh
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: document-processor
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: document-processor-hpa
+  namespace: referralmesh
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: document-processor
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: document-processor
+  namespace: referralmesh
+  labels:
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: document-processor
+  endpoints:
+    - port: metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: document-processor-alerts
+  namespace: referralmesh
+  labels:
+    release: prometheus
+spec:
+  groups:
+    - name: document-processor.rules
+      rules:
+        - alert: document-processorPodDown
+          expr: kube_deployment_status_replicas_available{deployment="document-processor"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "document-processor has zero available replicas"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: document-processor-role
+  namespace: referralmesh
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: document-processor-rolebinding
+  namespace: referralmesh
+subjects:
+  - kind: ServiceAccount
+    name: document-processor
+    namespace: referralmesh
+roleRef:
+  kind: Role
+  name: document-processor-role
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: document-processor-egress-dns
+  namespace: referralmesh
+spec:
+  podSelector:
+    matchLabels:
+      app: document-processor
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: document-processor-egress-gcp
+  namespace: referralmesh
+spec:
+  podSelector:
+    matchLabels:
+      app: document-processor
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 199.36.153.8/30 # private.googleapis.com restricted VIP
+      ports:
+        - protocol: TCP
+          port: 443
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: notification-service
+  namespace: referralmesh
+  annotations:
+    iam.gke.io/gcp-service-account: referralmesh-notification-svc@referralmesh-prod-4471.iam.gserviceaccount.com
+automountServiceAccountToken: true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: notification-service-config
+  namespace: referralmesh
+data:
+  SERVICE_NAME: "notification-service"
+  LOG_FORMAT: "json"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: notification-service-secret-refs
+  namespace: referralmesh
+  annotations:
+    # populated by an External Secrets sync from Secret Manager; no secret
+    # material is ever committed to this chart
+    external-secrets.io/backend: gcp-secret-manager
+type: Opaque
+stringData:
+  SECRET_MANAGER_PROJECT: "referralmesh-prod-4471"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification-service
+  namespace: referralmesh
+  labels:
+    app: notification-service
+    env: production
+    managed-by: helm
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: notification-service
+  template:
+    metadata:
+      labels:
+        app: notification-service
+      annotations:
+        checksum/config: "placeholder-checksum"
+    spec:
+      serviceAccountName: notification-service
+      automountServiceAccountToken: true
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: notification-service
+          image: us-docker.pkg.dev/referralmesh-prod-4471/referralmesh/notification-service:2026.09.1
+          ports:
+            - containerPort: 9090
+          envFrom:
+            - configMapRef:
+                name: referralmesh-shared-config
+            - configMapRef:
+                name: notification-service-config
+          resources:
+            requests:
+              cpu: 150m
+              memory: 256Mi
+            limits:
+              cpu: 400m
+              memory: 512Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: notification-service
+  namespace: referralmesh
+  labels:
+    app: notification-service
+spec:
+  selector:
+    app: notification-service
+  ports:
+    - name: http
+      port: 9090
+      targetPort: 9090
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: notification-service-pdb
+  namespace: referralmesh
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: notification-service
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: notification-service-hpa
+  namespace: referralmesh
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: notification-service
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: notification-service
+  namespace: referralmesh
+  labels:
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: notification-service
+  endpoints:
+    - port: metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: notification-service-alerts
+  namespace: referralmesh
+  labels:
+    release: prometheus
+spec:
+  groups:
+    - name: notification-service.rules
+      rules:
+        - alert: notification-servicePodDown
+          expr: kube_deployment_status_replicas_available{deployment="notification-service"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "notification-service has zero available replicas"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: notification-service-role
+  namespace: referralmesh
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: notification-service-rolebinding
+  namespace: referralmesh
+subjects:
+  - kind: ServiceAccount
+    name: notification-service
+    namespace: referralmesh
+roleRef:
+  kind: Role
+  name: notification-service-role
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: notification-service-egress-dns
+  namespace: referralmesh
+spec:
+  podSelector:
+    matchLabels:
+      app: notification-service
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: notification-service-egress-gcp
+  namespace: referralmesh
+spec:
+  podSelector:
+    matchLabels:
+      app: notification-service
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 199.36.153.8/30 # private.googleapis.com restricted VIP
+      ports:
+        - protocol: TCP
+          port: 443
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: audit-exporter
+  namespace: referralmesh
+  annotations:
+    iam.gke.io/gcp-service-account: referralmesh-notification-svc@referralmesh-prod-4471.iam.gserviceaccount.com
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: audit-exporter-config
+  namespace: referralmesh
+data:
+  SERVICE_NAME: "audit-exporter"
+  LOG_FORMAT: "json"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: audit-exporter-secret-refs
+  namespace: referralmesh
+  annotations:
+    # populated by an External Secrets sync from Secret Manager; no secret
+    # material is ever committed to this chart
+    external-secrets.io/backend: gcp-secret-manager
+type: Opaque
+stringData:
+  SECRET_MANAGER_PROJECT: "referralmesh-prod-4471"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: audit-exporter
+  namespace: referralmesh
+  labels:
+    app: audit-exporter
+    env: production
+    managed-by: helm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: audit-exporter
+  template:
+    metadata:
+      labels:
+        app: audit-exporter
+      annotations:
+        checksum/config: "placeholder-checksum"
+    spec:
+      serviceAccountName: audit-exporter
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: audit-exporter
+          image: us-docker.pkg.dev/referralmesh-prod-4471/referralmesh/audit-exporter:2026.09.1
+          ports:
+            - containerPort: 9090
+          envFrom:
+            - configMapRef:
+                name: referralmesh-shared-config
+            - configMapRef:
+                name: audit-exporter-config
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: audit-exporter
+  namespace: referralmesh
+  labels:
+    app: audit-exporter
+spec:
+  selector:
+    app: audit-exporter
+  ports:
+    - name: http
+      port: 9090
+      targetPort: 9090
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: audit-exporter-hpa
+  namespace: referralmesh
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: audit-exporter
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: audit-exporter
+  namespace: referralmesh
+  labels:
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: audit-exporter
+  endpoints:
+    - port: metrics
+      interval: 30s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: audit-exporter-alerts
+  namespace: referralmesh
+  labels:
+    release: prometheus
+spec:
+  groups:
+    - name: audit-exporter.rules
+      rules:
+        - alert: audit-exporterPodDown
+          expr: kube_deployment_status_replicas_available{deployment="audit-exporter"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "audit-exporter has zero available replicas"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: audit-exporter-role
+  namespace: referralmesh
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: audit-exporter-rolebinding
+  namespace: referralmesh
+subjects:
+  - kind: ServiceAccount
+    name: audit-exporter
+    namespace: referralmesh
+roleRef:
+  kind: Role
+  name: audit-exporter-role
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: audit-exporter-egress-dns
+  namespace: referralmesh
+spec:
+  podSelector:
+    matchLabels:
+      app: audit-exporter
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: audit-exporter-egress-gcp
+  namespace: referralmesh
+spec:
+  podSelector:
+    matchLabels:
+      app: audit-exporter
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 199.36.153.8/30 # private.googleapis.com restricted VIP
+      ports:
+        - protocol: TCP
+          port: 443

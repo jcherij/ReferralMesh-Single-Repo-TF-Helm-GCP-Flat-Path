@@ -1,10 +1,10 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: {{ .Values.namespace }}
+  name: referralmesh
   labels:
     app: referralmesh
-    env: {{ .Values.environment }}
+    env: production
     managed-by: helm
     pod-security.kubernetes.io/enforce: restricted
     pod-security.kubernetes.io/audit: restricted
@@ -14,7 +14,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: default-deny-all
-  namespace: {{ .Values.namespace }}
+  namespace: referralmesh
 spec:
   podSelector: {}
   policyTypes: [Ingress, Egress]
@@ -23,7 +23,7 @@ apiVersion: v1
 kind: LimitRange
 metadata:
   name: referralmesh-default-limits
-  namespace: {{ .Values.namespace }}
+  namespace: referralmesh
 spec:
   limits:
     - type: Container
@@ -38,7 +38,7 @@ apiVersion: v1
 kind: ResourceQuota
 metadata:
   name: referralmesh-namespace-quota
-  namespace: {{ .Values.namespace }}
+  namespace: referralmesh
 spec:
   hard:
     requests.cpu: "8"
@@ -51,10 +51,10 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: referralmesh-shared-config
-  namespace: {{ .Values.namespace }}
+  namespace: referralmesh
 data:
-  GCP_PROJECT_ID: {{ .Values.gcpProjectId | quote }}
-  ENVIRONMENT: {{ .Values.environment | quote }}
+  GCP_PROJECT_ID: "referralmesh-prod-4471"
+  ENVIRONMENT: "production"
   PUBSUB_TOPIC_REFERRAL_INTAKE: "referral-intake"
   PUBSUB_TOPIC_REFERRAL_MATCHED: "referral-matched"
   PUBSUB_TOPIC_ELIGIBILITY_REQUEST: "eligibility-check-request"
@@ -87,7 +87,7 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: referralmesh-ingress
-  namespace: {{ .Values.namespace }}
+  namespace: referralmesh
   annotations:
     kubernetes.io/ingress.class: nginx
     cert-manager.io/cluster-issuer: letsencrypt-prod
@@ -95,10 +95,10 @@ metadata:
 spec:
   tls:
     - hosts:
-        - {{ .Values.ingressHost }}
+        - referrals.example.com
       secretName: referralmesh-tls
   rules:
-    - host: {{ .Values.ingressHost }}
+    - host: referrals.example.com
       http:
         paths:
           - path: /
