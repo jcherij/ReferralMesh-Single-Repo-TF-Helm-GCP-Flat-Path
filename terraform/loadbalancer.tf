@@ -99,3 +99,11 @@ resource "google_compute_global_forwarding_rule" "referralmesh_http_redirect" {
   ip_address            = google_compute_global_address.lb_ip.address
   load_balancing_scheme = "EXTERNAL_MANAGED"
 }
+
+resource "google_compute_global_forwarding_rule" "psc_google_apis" {
+  name                  = "${var.app_name}-psc-google-apis"
+  project               = var.gcp_project_id
+  target                = "vpc-sc"
+  network               = "default"
+  load_balancing_scheme = ""
+}
