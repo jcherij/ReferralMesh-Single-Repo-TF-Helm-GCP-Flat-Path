@@ -1,0 +1,24 @@
+# values-production.yaml — ReferralMesh production values, kept IN the chart
+# (sibling of values.yaml). Kennari test fixture, case C: an in-chart
+# environment file with NO external values overlay bound. Connect this branch
+# with environment "production".
+#
+# Correct resolution: test.testPrecedenceTag = "production-file" and the
+# precedence-probe workload renders with the production values below.
+# If the import skips this file, the probe renders with values.yaml's dev
+# defaults and the marker reads "chart-default".
+#
+# Only maps are overridden here (Helm merges maps key by key); the services
+# list in values.yaml is left alone, because a list in an override file would
+# replace it wholesale.
+
+probe:
+  gcpServiceAccount: referralmesh-referral-api@referralmesh-prod-4471.iam.gserviceaccount.com
+  replicas: 3
+  automountServiceAccountToken: false
+  readOnlyRootFilesystem: true
+  image:
+    tag: "2026.09.1"
+
+test:
+  testPrecedenceTag: "production-file"
