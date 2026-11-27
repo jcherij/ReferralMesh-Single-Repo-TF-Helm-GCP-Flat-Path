@@ -110,3 +110,19 @@ services:
     readOnlyRootFilesystem: true
     automountServiceAccountToken: false
     createPdb: false
+
+# --- Kennari values-resolution probe (test branches only) -------------------
+# Dev-safe defaults, as a chart's values.yaml usually carries. The production
+# environment file on this branch overrides every key below.
+probe:
+  gcpServiceAccount: ""
+  replicas: 1
+  automountServiceAccountToken: true
+  readOnlyRootFilesystem: false
+  image:
+    repository: us-docker.pkg.dev/referralmesh-prod-4471/referralmesh/referral-api
+    tag: latest
+
+# Precedence marker: the file whose value wins names itself here.
+test:
+  testPrecedenceTag: "chart-default"

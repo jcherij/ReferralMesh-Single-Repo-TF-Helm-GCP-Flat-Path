@@ -1,0 +1,75 @@
+# precedence-probe.yaml — Kennari values-resolution test fixture (test branches only).
+#
+# The rest of this chart is static YAML, so its values.yaml never reaches the
+# rendered manifests. This probe is the one workload whose GCP controls are
+# driven by .Values, so the rendered graph shows which values files the import
+# actually merged:
+#   values.yaml only           -> dev defaults (empty Workload Identity, 1 replica,
+#                                 automount on, writable root fs, :latest)
+#   production file merged     -> compliant production values
+# The label kennari.test/precedence names the file that won.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: precedence-probe
+  namespace: {{ .Values.namespace }}
+  annotations:
+    iam.gke.io/gcp-service-account: {{ .Values.probe.gcpServiceAccount | quote }}
+  labels:
+    app: precedence-probe
+    kennari.test/precedence: {{ .Values.test.testPrecedenceTag | quote }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: precedence-probe
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: precedence-probe
+    kennari.test/precedence: {{ .Values.test.testPrecedenceTag | quote }}
+spec:
+  replicas: {{ .Values.probe.replicas }}
+  selector:
+    matchLabels:
+      app: precedence-probe
+  template:
+    metadata:
+      labels:
+        app: precedence-probe
+    spec:
+      serviceAccountName: precedence-probe
+      automountServiceAccountToken: {{ .Values.probe.automountServiceAccountToken }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: probe
+          image: {{ printf "%s:%s" .Values.probe.image.repository .Values.probe.image.tag | quote }}
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: {{ .Values.probe.readOnlyRootFilesystem }}
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: precedence-probe-pdb
+  namespace: {{ .Values.namespace }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: precedence-probe
